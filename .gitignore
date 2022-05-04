@@ -7,4 +7,7 @@ predictions_kitti/
 wandb/
 checkpoints/
 pretrained/
-
+output/*
+test_imgs/*
+AdaBins/pseudo_lidar_results/*
+AdaBins/difference/*

@@ -1,16 +1,17 @@
+from genericpath import exists
 import glob
 import os
 
 import numpy as np
+from utilities.crop_images import crop_image
 import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from tqdm import tqdm
-
-import model_io
-import utils
-from models import UnetAdaptiveBins
+from . import model_io
+from . import utils
+from .models import UnetAdaptiveBins
 
 
 def _is_pil_image(img):
@@ -64,7 +65,7 @@ class ToTensor(object):
 
 
 class InferenceHelper:
-    def __init__(self, dataset='nyu', device='cuda:0'):
+    def __init__(self, dataset='kitti', device='cuda:0'):
         self.toTensor = ToTensor()
         self.device = device
         if dataset == 'nyu':
@@ -72,13 +73,14 @@ class InferenceHelper:
             self.max_depth = 10
             self.saving_factor = 1000  # used to save in 16 bit
             model = UnetAdaptiveBins.build(n_bins=256, min_val=self.min_depth, max_val=self.max_depth)
-            pretrained_path = "./pretrained/AdaBins_nyu.pt"
+            pretrained_path = os.path.join(os.path.dirname(__file__), 'pretrained/AdaBins_nyu.pt')
         elif dataset == 'kitti':
             self.min_depth = 1e-3
             self.max_depth = 80
             self.saving_factor = 256
             model = UnetAdaptiveBins.build(n_bins=256, min_val=self.min_depth, max_val=self.max_depth)
-            pretrained_path = "./pretrained/AdaBins_kitti.pt"
+            pretrained_path = os.path.join(os.path.dirname(__file__), 'pretrained/AdaBins_kitti.pt')
+            print(pretrained_path)
         else:
             raise ValueError("dataset can be either 'nyu' or 'kitti' but got {}".format(dataset))
 
@@ -87,12 +89,12 @@ class InferenceHelper:
         self.model = model.to(self.device)
 
     @torch.no_grad()
-    def predict_pil(self, pil_image, visualized=False):
+    def predict_pil(self, pil_image, visualized=False, monte_carlo_dropout=False):
         # pil_image = pil_image.resize((640, 480))
         img = np.asarray(pil_image) / 255.
 
         img = self.toTensor(img).unsqueeze(0).float().to(self.device)
-        bin_centers, pred = self.predict(img)
+        bin_centers, pred = self.predict(img, monte_carlo_dropout=monte_carlo_dropout)
 
         if visualized:
             viz = utils.colorize(torch.from_numpy(pred).unsqueeze(0), vmin=None, vmax=None, cmap='magma')
@@ -102,7 +104,11 @@ class InferenceHelper:
         return bin_centers, pred
 
     @torch.no_grad()
-    def predict(self, image):
+    def predict(self, image, monte_carlo_dropout=False):
+        if (monte_carlo_dropout):
+            for m in self.model.modules():
+                if m.__class__.__name__.startswith("Dropout"):
+                    m.train()
         bins, pred = self.model(image)
         pred = np.clip(pred.cpu().numpy(), self.min_depth, self.max_depth)
 
@@ -129,22 +135,28 @@ class InferenceHelper:
         return centers, final
 
     @torch.no_grad()
-    def predict_dir(self, test_dir, out_dir):
+    def predict_dir(self, test_dir, out_dir, monte_carlo_dropout=False):
         os.makedirs(out_dir, exist_ok=True)
         transform = ToTensor()
         all_files = glob.glob(os.path.join(test_dir, "*"))
         self.model.eval()
         for f in tqdm(all_files):
-            image = np.asarray(Image.open(f), dtype='float32') / 255.
+            basename = os.path.basename(f).split('.')[0]
+            save_path = os.path.join(out_dir, basename + ".png")
+            #skip already predicted depth maps
+            if (exists(save_path)):
+                print("skipped")
+                continue
+            image = Image.open(f)
+            #image = crop_image(image)
+            image = np.asarray(image, dtype='float32') / 255.
             image = transform(image).unsqueeze(0).to(self.device)
 
-            centers, final = self.predict(image)
+            centers, final = self.predict(image, monte_carlo_dropout=monte_carlo_dropout)
             # final = final.squeeze().cpu().numpy()
 
             final = (final * self.saving_factor).astype('uint16')
-            basename = os.path.basename(f).split('.')[0]
-            save_path = os.path.join(out_dir, basename + ".png")
-
+            print(final.squeeze())
             Image.fromarray(final.squeeze()).save(save_path)
 
 
