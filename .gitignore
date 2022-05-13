@@ -6,6 +6,7 @@ predictions_nyu/
 predictions_kitti/
 wandb/
 checkpoints/
+pretrained
 pretrained/
 output/*
 test_imgs/*

@@ -3,7 +3,6 @@ import glob
 import os
 
 import numpy as np
-from utilities.crop_images import crop_image
 import torch
 import torch.nn as nn
 from PIL import Image
